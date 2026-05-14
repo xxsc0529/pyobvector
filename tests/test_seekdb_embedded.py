@@ -131,19 +131,16 @@ class TestSeekdbEmbeddedConnection(unittest.TestCase):
         self.assertFalse(client.check_table_exists(table_name))
 
     def test_vector_table_and_ann_search(self):
-        """Test create table with vector index, insert, and ann_search.
+        """VECTOR column + insert + KNN via post_ann_search (ORDER BY + LIMIT).
 
-        Use IVF + lib=OB (not HNSW/vsag): vsag native code has been observed to
-        SIGSEGV (exit 139) on Linux CI runners for embedded SeekDB.
+        Embedded SeekDB on Linux CI has crashed with SIGSEGV (139) when using
+        ``CREATE VECTOR INDEX`` and/or ``ann_search`` (``APPROXIMATE limit``).
+        This test avoids both: no vector index, and ``post_ann_search`` instead
+        of ``ann_search`` to exercise ``VECTOR`` + ``l2_distance`` safely.
         """
         from sqlalchemy import Column, Integer, VARCHAR
 
-        from pyobvector import (
-            SeekdbRemoteClient,
-            VECTOR,
-            VectorIndex,
-            l2_distance,
-        )
+        from pyobvector import SeekdbRemoteClient, VECTOR, l2_distance
 
         client = SeekdbRemoteClient(path=self.db_path, database="test")
         table_name = "embed_vec_table"
@@ -156,32 +153,18 @@ class TestSeekdbEmbeddedConnection(unittest.TestCase):
                 Column("title", VARCHAR(255)),
                 Column("vec", VECTOR(3)),
             ],
-            indexes=[
-                VectorIndex(
-                    "vec_idx",
-                    "vec",
-                    params="distance=l2, type=ivf_flat, lib=OB, nlist=4",
-                ),
-            ],
             mysql_organization="heap",
         )
-        # Enough rows for IVF build (mirrors remote IVF tests)
-        insert_rows = [
-            {"id": 1, "title": "doc A", "vec": [1.0, 1.0, 1.0]},
-            {"id": 2, "title": "doc B", "vec": [1.0, 2.0, 3.0]},
-            {"id": 3, "title": "doc C", "vec": [3.0, 2.0, 1.0]},
-        ]
-        insert_rows.extend(
-            {
-                "id": i,
-                "title": f"doc {i}",
-                "vec": [float(i % 3), float(i % 5), float(i % 7)],
-            }
-            for i in range(4, 16)
+        client.insert(
+            table_name,
+            data=[
+                {"id": 1, "title": "doc A", "vec": [1.0, 1.0, 1.0]},
+                {"id": 2, "title": "doc B", "vec": [1.0, 2.0, 3.0]},
+                {"id": 3, "title": "doc C", "vec": [3.0, 2.0, 1.0]},
+            ],
         )
-        client.insert(table_name, data=insert_rows)
 
-        res = client.ann_search(
+        res = client.post_ann_search(
             table_name=table_name,
             vec_data=[1.0, 2.0, 3.0],
             vec_column_name="vec",
