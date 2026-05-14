@@ -131,7 +131,11 @@ class TestSeekdbEmbeddedConnection(unittest.TestCase):
         self.assertFalse(client.check_table_exists(table_name))
 
     def test_vector_table_and_ann_search(self):
-        """Test create table with vector index, insert, and ann_search."""
+        """Test create table with vector index, insert, and ann_search.
+
+        Use IVF + lib=OB (not HNSW/vsag): vsag native code has been observed to
+        SIGSEGV (exit 139) on Linux CI runners for embedded SeekDB.
+        """
         from sqlalchemy import Column, Integer, VARCHAR
 
         from pyobvector import (
@@ -154,19 +158,28 @@ class TestSeekdbEmbeddedConnection(unittest.TestCase):
             ],
             indexes=[
                 VectorIndex(
-                    "vec_idx", "vec", params="distance=l2, type=hnsw, lib=vsag"
+                    "vec_idx",
+                    "vec",
+                    params="distance=l2, type=ivf_flat, lib=OB, nlist=4",
                 ),
             ],
             mysql_organization="heap",
         )
-        client.insert(
-            table_name,
-            data=[
-                {"id": 1, "title": "doc A", "vec": [1.0, 1.0, 1.0]},
-                {"id": 2, "title": "doc B", "vec": [1.0, 2.0, 3.0]},
-                {"id": 3, "title": "doc C", "vec": [3.0, 2.0, 1.0]},
-            ],
+        # Enough rows for IVF build (mirrors remote IVF tests)
+        insert_rows = [
+            {"id": 1, "title": "doc A", "vec": [1.0, 1.0, 1.0]},
+            {"id": 2, "title": "doc B", "vec": [1.0, 2.0, 3.0]},
+            {"id": 3, "title": "doc C", "vec": [3.0, 2.0, 1.0]},
+        ]
+        insert_rows.extend(
+            {
+                "id": i,
+                "title": f"doc {i}",
+                "vec": [float(i % 3), float(i % 5), float(i % 7)],
+            }
+            for i in range(4, 16)
         )
+        client.insert(table_name, data=insert_rows)
 
         res = client.ann_search(
             table_name=table_name,
